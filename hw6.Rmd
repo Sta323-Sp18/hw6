@@ -9,7 +9,9 @@ output: html_document
 
 ```{r setup, message=FALSE}
 # Load any necessary packages here
-
+library(sf)
+library(dplyr)
+library(ggplot2)
 ```
 
 ## Task 1 - Clean and Merge Data
@@ -17,25 +19,41 @@ output: html_document
 ### Parking Violation Data
 
 ```{r}
+load("/data/nyc_parking/NYParkingViolations.Rdata")
 
+nyc = nyc %>%
+  filter(Violation.Precinct >= 1, Violation.Precinct <= 34) %>%
+  select(Issue.Date, Violation.Precinct, House.Number, Street.Name) %>%
+  mutate(address = paste(House.Number, Street.Name))
 ```
 
 ### Geocoding Data
 
-```{r}
+```{r warning=FALSE}
+pluto = st_read("/data/nyc_parking/pluto_manhattan/", quiet = TRUE, stringsAsFactors = FALSE) %>%
+  select(Address) %>%
+  st_centroid() 
 
+pluto_xy = data.frame(address = pluto$Address, st_coordinates(pluto)) 
+
+plot(st_geometry(pluto), pch=16, cex=0.1)
 ```
 
 ### Clean data
 
 ```{r}
-
+nyc = mutate(nyc, address = tolower(address))
+pluto_xy = mutate(pluto_xy, address = tolower(address))
 ```
 
 
 ### Merge data
 
 ```{r}
+full = inner_join(nyc, pluto_xy)
+
+ggplot(full, aes(x=X, y=Y, color = forcats::as_factor(as.character(Violation.Precinct)))) +
+  geom_point()
 ```
 
 
