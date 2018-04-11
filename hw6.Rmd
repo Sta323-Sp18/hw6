@@ -42,7 +42,6 @@ if (!file.exists("nyc.rds")) {
 pluto = st_read("/data/nyc_parking/pluto_manhattan/", quiet = TRUE, stringsAsFactors = FALSE) %>%
   select(Address) %>%
   st_centroid() 
-
 pluto_xy = data.frame(address = pluto$Address, st_coordinates(pluto)) 
 ```
 
