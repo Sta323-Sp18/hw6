@@ -9,7 +9,9 @@ output: html_document
 
 ```{r setup, message=FALSE}
 # Load any necessary packages here
-
+library(sf)
+library(dplyr)
+library(ggplot2)
 ```
 
 ## Task 1 - Clean and Merge Data
@@ -17,25 +19,51 @@ output: html_document
 ### Parking Violation Data
 
 ```{r}
-
+if (!file.exists("nyc.rds")) {
+  load("/data/nyc_parking/NYParkingViolations.Rdata")
+  
+  nyc = nyc %>%
+    filter(Violation.Precinct >= 1, Violation.Precinct <= 34) %>%
+    select(Violation.Precinct, House.Number, Street.Name) %>%
+    transmute(
+      precinct = Violation.Precinct, 
+      address = paste(House.Number, Street.Name)
+    )
+  
+  saveRDS(nyc, "nyc.rds")
+} else {
+  nyc = readRDS("nyc.rds")
+}
 ```
 
 ### Geocoding Data
 
-```{r}
+```{r warning=FALSE}
+pluto = st_read("/data/nyc_parking/pluto_manhattan/", quiet = TRUE, stringsAsFactors = FALSE) %>%
+  select(Address) %>%
+  st_centroid() 
 
+pluto_xy = data.frame(address = pluto$Address, st_coordinates(pluto)) 
 ```
 
 ### Clean data
 
 ```{r}
-
+nyc = mutate(nyc, address = tolower(address))
+pluto_xy = mutate(pluto_xy, address = tolower(address))
 ```
 
 
 ### Merge data
 
 ```{r}
+manh_precincts = c(1,5,6,7,9,10,13,14,17,18,19,20,22,23,24,25,26,28,30,32,33,34)
+
+d = inner_join(nyc, pluto_xy, by="address") %>%
+  filter(precinct %in% manh_precincts)
+
+ggplot(d, aes(x=X, y=Y, color = forcats::as_factor(as.character(precinct)))) +
+  geom_point()
 ```
 
 
@@ -49,7 +77,125 @@ output: html_document
 
 ### Modeling
 
-```{r}
+#### Convex Hull
 
+```{r}
+first = filter(d, precinct == 1)
+
+first_cv = select(first, X, Y) %>% 
+  as.matrix() %>% 
+  st_multipoint() %>% 
+  st_sfc() %>% 
+  st_convex_hull()
+
+ggplot(d) +
+  geom_point(aes(x=X, y=Y, color = forcats::as_factor(as.character(precinct)))) +
+  geom_sf(data=st_sf(first_cv), alpha=0.2)
 ```
 
+
+#### Prediction Locations
+
+```{r}
+manh = st_read("/data/nyc_parking/nybb/", quiet = TRUE) %>%
+  filter(BoroName == "Manhattan")
+
+if (!file.exists("manh_grid.rds")) {
+  bbox = st_bbox(manh)
+  
+  x = seq(bbox["xmin"], bbox["xmax"], 0.00075)
+  y = seq(bbox["ymin"], bbox["ymax"], 0.00075)
+  
+  grid = expand.grid(X = x, Y = y) %>%
+    as.matrix() %>%
+    st_multipoint() %>%
+    st_sfc() %>%
+    st_set_crs(st_crs(manh))
+  
+  manh_grid = st_intersection(manh, grid) %>% 
+    st_cast("POINT") %>%
+    st_coordinates() %>%
+    as.data.frame()
+  
+  saveRDS(manh_grid, "manh_grid.rds")
+} else {
+  readRDS("manh_grid.rds")
+}
+```
+
+
+#### Logistic Regression
+
+```{r}
+d_log = mutate(d, p = as.integer(precinct == 2))
+
+m_log = glm(p ~ poly(X,3)*poly(Y,3), data = d_log, family=binomial)
+
+d_pred = manh_grid %>%
+  mutate(
+    pred = predict(m_log, newdata = manh_grid, type="response")
+  )
+  
+ggplot(d_pred, aes(x=X, y=Y, color=pred)) +
+  geom_point(size=0.3)
+```
+
+
+#### "Multiple" Logistic Regression
+
+```{r}
+precincts = sort(unique(d$precinct))
+d_pred = manh_grid
+
+for(prec in precincts) {
+  d_log = mutate(d, p = as.integer(precinct == prec))
+
+  m_log = glm(p ~ poly(X,2)*poly(Y,2), data = d_log, family=binomial)
+  
+  d_pred[[as.character(prec)]] = predict(m_log, newdata = manh_grid, type="response") 
+}
+
+probs = select(d_pred, -X, -Y) %>% as.matrix()
+probs_max_index = apply(probs, 1, which.max)
+  
+d_pred$precinct = precincts[probs_max_index] 
+
+ggplot(d_pred, aes(x=X, y=Y, color=forcats::as_factor(as.character(precinct)))) +
+  geom_point(size=0.3)
+```
+
+
+#### Multinomial regression
+
+```{r}
+d_mn = mutate(d, precinct = as.factor(precinct))
+
+m_mn = nnet::multinom(precinct ~ poly(X,2)*poly(Y,2), data = d_mn)
+
+pred_mn = predict(m_mn, newdata = manh_grid)
+
+ggplot(manh_grid, aes(x=X, y=Y, color=pred_mn)) +
+  geom_point(size=0.3)
+```
+
+#### xgboost
+
+```{r}
+library(xgboost)
+
+d_xg = d %>% select(-address) %>% mutate(precinct = as.factor(precinct))
+
+precincts_map = d_xg$precinct %>% levels()
+
+y = d_xg$precinct %>% as.integer() %>% {. - 1L}
+x = select(d_xg, X, Y) %>% as.matrix()
+
+
+m_xg = xgboost(data=x, label=y, nthread=4, nround=30, objective="multi:softmax", num_class=length(precincts))
+
+pred_xg_label = predict(m_xg, newdata = as.matrix(manh_grid))
+pred_xg_precinct = precincts_map[pred_xg_label+1L]
+
+ggplot(manh_grid, aes(x=X, y=Y, color=pred_xg_precinct)) +
+  geom_point(size=0.5)
+```
