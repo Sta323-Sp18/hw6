@@ -1,6 +1,15 @@
-box: rocker/tidyverse
+box: rocker/r-base
 build:
   steps:
+    - script Update Env
+      code: |
+        apt-get update
+        apt-get install -y libssl-dev libcurl4-openssl-dev
+        install2.r httr base64enc
+    - script:
+      name: Show score
+      code: |
+        wget --quiet -O - http://saxon.stat.duke.edu:7887/score?t=$team
     - script:
       name: Update scores
       code: |
