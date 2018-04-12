@@ -1,3 +1,5 @@
+[![wercker status](https://app.wercker.com/status/de8fdba119fd6083a4bdea696ecc3fc6/s/master "wercker status")](https://app.wercker.com/project/byKey/de8fdba119fd6083a4bdea696ecc3fc6)
+
 Homework 6 - Parking Wars: Manhattan
 ---
 due Thursday, April 19th by 11:59 pm
