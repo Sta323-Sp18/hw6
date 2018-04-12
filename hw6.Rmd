@@ -118,7 +118,7 @@ if (!file.exists("manh_grid.rds")) {
   
   saveRDS(manh_grid, "manh_grid.rds")
 } else {
-  readRDS("manh_grid.rds")
+  manh_grid = readRDS("manh_grid.rds")
 }
 ```
 
@@ -190,11 +190,42 @@ y = d_xg$precinct %>% as.integer() %>% {. - 1L}
 x = select(d_xg, X, Y) %>% as.matrix()
 
 
-m_xg = xgboost(data=x, label=y, nthread=4, nround=30, objective="multi:softmax", num_class=length(precincts))
+m_xg = xgboost(data=x, label=y, nthread=4, nround=30, objective="multi:softmax", num_class=length(precincts_map))
 
 pred_xg_label = predict(m_xg, newdata = as.matrix(manh_grid))
 pred_xg_precinct = precincts_map[pred_xg_label+1L]
 
 ggplot(manh_grid, aes(x=X, y=Y, color=pred_xg_precinct)) +
   geom_point(size=0.5)
+```
+
+### Prediction
+
+```{r message=FALSE}
+d_res = bind_cols(manh_grid, precinct = pred_xg_precinct) %>%
+  mutate(geometry = st_sfc(purrr::map2(X,Y, ~ st_point(c(.x,.y))))) %>%
+  st_as_sf() %>%
+  select(-X, -Y) %>%
+  st_set_crs(st_crs(manh)) %>%
+  group_by(precinct) %>%
+  summarize()
+
+d_melt = d_res %>%
+  st_buffer(dist = 0.00075) %>%
+  group_by(precinct) %>%
+  summarize() %>%
+  st_buffer(dist = -0.000375) %>%
+  st_intersection(st_geometry(manh))
+
+mapview::mapview(d_melt)
+
+st_write(d_melt, "precincts.geojson", delete_dsn = TRUE, quiet=TRUE)
+```
+
+#### Visualizing Predictions
+
+```{r}
+ggplot(ch, aes(fill=precinct)) + geom_sf(alpha=0.2) + theme_bw()
+mapview::mapview(ch)
+
 ```
